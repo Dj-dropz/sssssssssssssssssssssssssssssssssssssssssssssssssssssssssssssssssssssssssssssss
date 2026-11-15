@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DexBlocks</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header><div class="brand"><span class="mark">D</span><span>dexblocks</span></div><input id="search" placeholder="Search experiences"><div id="who" class="who">not signed in</div></header>
+<main>
+<nav class="main-nav">
+<button class="nav active" data-page="home">Discover</button>
+<button class="nav" data-page="recent">Recent</button>
+
+
+<button class="nav" data-page="settings">Settings</button>
+
+
+</nav>
+<section id="home" class="page"><div class="sectionhead"><div><p class="eyebrow">THE COMMUNITY</p><h2>Popular experiences</h2></div><span class="muted">visitor counts update on the server</span></div><div id="games" class="games"></div></section>
+<section id="recent" class="page hidden"><div class="sectionhead"><div><p class="eyebrow">PICK UP WHERE YOU LEFT OFF</p><h2>Recently visited</h2></div></div><div id="recentGames" class="games"></div></section>
+<section id="studio" class="page hidden"><div class="sectionhead"><div><p class="eyebrow">CREATOR TOOLS</p><h2>DexBlocks Studio</h2></div></div><div class="panel"><h3>Publish an experience listing</h3><div class="fields"><input id="gameTitle" placeholder="Experience name (max 60 chars)"><input id="gameCategory" placeholder="Category, e.g. Obby"><textarea id="gameDescription" placeholder="Describe your experience (max 500 chars)"></textarea><button id="createGame">Create listing</button></div></div><div class="panel"><h3>Import Roblox project file</h3><p class="muted">Upload an .rbxm model or .rbxl place file to your host. Uploading does not run or convert Roblox code.</p><input type="file" id="rbxfile" accept=".rbxm,.rbxl"><button id="uploadFile">Upload file</button><p id="uploadStatus" class="muted"></p><h3>Your host files</h3><button id="refreshFiles" class="secondary">Refresh files</button><ul id="files"></ul></div></section>
+<section id="chat" class="page hidden hidden"><div class="sectionhead"><div><p class="eyebrow">MULTIPLAYER</p><h2>Community chat</h2></div></div><div class="panel"><div class="roomline"><label>Room <input id="room" value="lobby" maxlength="30"></label><button id="joinRoom" class="secondary">Join room</button><span id="socketState" class="muted">sign in to connect</span></div><div id="chatlog" class="chatlog"></div><div class="sendline"><input id="chatInput" maxlength="180" placeholder="Write a message (180 characters max)"><button id="sendChat">Send</button></div><p class="muted">Chat has a 1.8-second cooldown and message length limit. This is a basic filter, not full moderation.</p></div></section>
+<section id="account" class="page hidden"><div class="sectionhead"><div><p class="eyebrow">YOUR ACCOUNT</p><h2>Sign in or register</h2></div></div><div class="authgrid"><div class="panel"><h3>Sign in</h3><input id="loginName" placeholder="Username"><input id="loginPass" type="password" placeholder="Password"><button id="login">Sign in</button></div><div class="panel"><h3>Create account</h3><input id="regName" placeholder="Username (3–20 characters)"><input id="regPass" type="password" placeholder="Password (10+ characters)"><button id="register">Create account</button></div></div><p id="accountStatus" class="muted"></p><button id="logout" class="secondary">Sign out</button></section>
+
+<section id="settings" class="page hidden">
+  <div class="sectionhead"><div><h2>Settings</h2><p class="muted">customize your DexBlocks experience</p></div></div>
+  <div class="settings-list">
+    <div class="setting-row"><div><strong>Interface</strong><p>Use the smooth black theme.</p></div><span class="setting-state">ON</span></div>
+    <div class="setting-row"><div><strong>Reduced motion</strong><p>Turn off unnecessary interface animations.</p></div><label class="setting-switch"><input id="settingReducedMotion" type="checkbox"><span></span></label></div>
+    <div class="setting-row"><div><strong>Open chat in games</strong><p>Show the in-game chat when an experience starts.</p></div><label class="setting-switch"><input id="settingGameChat" type="checkbox" checked><span></span></label></div>
+    <div class="setting-row"><div><strong>Game controls</strong><p>WASD or arrow keys to move. Press Esc for the game menu.</p></div></div>
+    <div class="setting-row"><div><strong>Window mode</strong><p>DexBlocks stays in a normal desktop window. Games open inside that window.</p></div></div>
+  </div>
+</section>
+<section id="admin" class="page hidden"><div class="sectionhead"><div><p class="eyebrow">OWNER CONSOLE</p><h2>Admin tools</h2></div></div><div class="panel"><p>Admin and verified badges are assigned by the server. Sign in as the owner to view accounts and manage verified tags.</p><button id="loadUsers">Load users</button><div id="users"></div></div></section>
+
+
+<div id="authGate" class="auth-gate">
+  <div class="auth-gate-card">
+    <div class="auth-gate-brand"><span class="mark">D</span> dexblocks</div>
+    <h1 id="gateHeading">Sign in to DexBlocks</h1>
+    <p id="gateDescription">Sign in or create an account to continue.</p>
+
+    <div id="gateLogin" class="gate-form">
+      <label>Username</label>
+      <input id="gateLoginName" autocomplete="username" placeholder="Username">
+      <label>Password</label>
+      <input id="gateLoginPass" type="password" autocomplete="current-password" placeholder="Password">
+      <button id="gateLoginButton" class="gate-primary">Sign in</button>
+      <p id="gateLoginError" class="gate-error"></p>
+      <p class="gate-switch">New to DexBlocks? <button id="showGateRegister" class="gate-link">Create an account</button></p>
+    </div>
+
+    <div id="gateRegister" class="gate-form hidden">
+      <label>Username</label>
+      <input id="gateRegisterName" autocomplete="username" maxlength="20" placeholder="3–20 letters, numbers or underscores">
+      <label>Password</label>
+      <input id="gateRegisterPass" type="password" autocomplete="new-password" placeholder="At least 10 characters">
+      <label>Confirm password</label>
+      <input id="gateRegisterConfirm" type="password" autocomplete="new-password" placeholder="Repeat password">
+      <button id="gateRegisterButton" class="gate-primary">Create account</button>
+      <p id="gateRegisterError" class="gate-error"></p>
+      <p class="gate-switch">Already have an account? <button id="showGateLogin" class="gate-link">Sign in</button></p>
+    </div>
+  </div>
+</div>
+\n<div id="playModal" class="play-overlay hidden">
+  <section class="play-window">
+    <header class="play-header">
+      <div><strong id="playTitle">Block Builder</strong><span id="playStatus">Starting game...</span></div>
+      <button id="leaveGame" class="secondary">Menu</button>
+    </header>
+    <div class="game-layout">
+      <div class="game-stage">
+        <canvas id="world" width="900" height="520"></canvas>
+        <div class="game-controls">WASD / arrow keys to move</div>
+        <div class="rbx-top-left">
+          <button id="rbxMenuButton" class="rbx-icon-button" title="Menu">☰</button>
+          <button id="rbxChatButton" class="rbx-icon-button" title="Chat">☏</button>
+        </div>
+        <section id="rbxChatPanel" class="rbx-chat-panel">
+          <div class="rbx-chat-heading">Experience Chat</div>
+          <div id="gameChatLog" class="rbx-chat-log"></div>
+          <form id="gameChatForm" class="rbx-chat-form">
+            <input id="gameChatInput" maxlength="180" placeholder="Click here or press / to chat">
+            <button type="submit">Send</button>
+          </form>
+        </section>
+        <div id="rbxMenu" class="rbx-menu hidden">
+          <h2>Menu</h2>
+          <button id="rbxResume">Resume</button>
+          <button id="rbxToggleChat" class="secondary">Toggle Chat</button>
+          <button id="rbxLeaveConfirm" class="rbx-leave-button">Leave Experience</button>
+        </div>
+      </div>
+      <aside class="players-panel">
+        <h3>Players in game</h3>
+        <div id="playerList" class="player-list"></div>
+        <p class="muted">Multiplayer position syncing requires an account and a connection to the same host.</p>
+      </aside>
+    </div>
+  </section>
+</div>
+</main><footer><span>DEXBLOCKS</span><span>community platform · local host</span></footer>
+<script src="/socket.io/socket.io.js"></script><script src="/three.min.js"></script><script src="/app.js"></script>
+</body></html>

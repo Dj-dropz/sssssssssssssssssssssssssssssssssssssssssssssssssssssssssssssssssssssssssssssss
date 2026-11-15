@@ -1,0 +1,1314 @@
+let token = localStorage.getItem('dexblocks-token') || '';
+let currentUser = null;
+let socket = null;
+let recent = JSON.parse(localStorage.getItem('dexblocks-recent') || '[]');
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(url, options={}) {
+  const headers = {...(options.headers||{})};
+  if (token) headers.Authorization = 'Bearer ' + token;
+  if (options.body && !(options.body instanceof FormData)) headers['Content-Type']='application/json';
+  const r=await fetch(url,{...options,headers});
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(data.error || 'Request failed.');
+  return data;
+}
+function status(msg){$('accountStatus').textContent=msg}
+function showPage(page){
+  document.querySelectorAll('.page').forEach(p=>p.classList.toggle('hidden',p.id!==page));
+  document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
+  if(page==='recent') renderRecent();
+  if(page==='studio'&&token) loadFiles();
+}
+document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>showPage(b.dataset.page));
+if ($('explore')) $('explore').onclick=()=>{showPage('home');$('games')?.scrollIntoView({behavior:'smooth'})};
+async function refreshMe(){
+  if(!token){currentUser=null;updateWho();disconnectChat();return}
+  try{currentUser=await api('/api/me');updateWho();connectChat()}
+  catch{token='';localStorage.removeItem('dexblocks-token');currentUser=null;updateWho();disconnectChat()}
+}
+function updateWho(){
+  const u=currentUser;
+  $('who').innerHTML=u?`${esc(u.username)} ${u.verified?'<span class="badge verified">✓ VERIFIED</span>':''} ${['owner','admin'].includes(u.role)?'<span class="badge">ADMIN</span>':''}`:'not signed in';
+}
+function card(g){
+  const isRecent=recent.includes(g.id);
+  return `<article class="game" data-id="${esc(g.id)}"><div class="cover">${esc(g.title.slice(0,2).toUpperCase())}</div><div class="gamebody"><h3>${esc(g.title)}</h3><p>${esc(g.description||'A DexBlocks experience.')}</p><div class="meta"><span>${esc(g.category||'Community')}</span><span>${Number(g.visits||0).toLocaleString()} visits</span></div><div class="meta"><span>by ${esc(g.owner||'Dexblocks')}</span><span>${isRecent?'RECENT':'PLAY'}</span></div></div></article>`;
+}
+async function loadGames(){
+  try{
+    const games=await api('/api/games');
+    const q=$('search').value.toLowerCase();
+    const filtered=games.filter(g=>(g.title+' '+g.description+' '+g.category+' '+g.owner).toLowerCase().includes(q));
+    $('games').innerHTML=filtered.map(card).join('')||'<p class="muted">No experiences found.</p>';
+    $('games').querySelectorAll('.game').forEach(el=>el.onclick=(e)=>{e.preventDefault();e.stopPropagation();const game=games.find(g=>String(g.id)===String(el.dataset.id));if(game){const opener=window.dexOpenGameDetails;if(typeof opener==='function')opener(game);else visit(el.dataset.id,games);}});e.stopPropagation();const game=games.find(g=>String(g.id)===String(el.dataset.id));if(game)window.dexOpenGameDetails?.(game);});
+    renderRecent(games);
+  }catch(e){$('games').innerHTML=`<p class="muted">${esc(e.message)}</p>`}
+}
+async function visit(id,games){
+  try {
+    const list = games || await api('/api/games');
+    const game = list.find(g => g.id === id);
+    if (!game) throw new Error('Experience not found.');
+    await api('/api/games/'+encodeURIComponent(id)+'/visit',{method:'POST'});
+    recent=[id,...recent.filter(x=>x!==id)].slice(0,20);
+    localStorage.setItem('dexblocks-recent',JSON.stringify(recent));
+    await loadGames();
+    openGame(game);
+  } catch(e) { alert(e.message); }
+}
+function renderRecent(games){
+  if(!games) {api('/api/games').then(gs=>renderRecent(gs)).catch(()=>{});return}
+  const items=recent.map(id=>games.find(g=>g.id===id)).filter(Boolean);
+  $('recentGames').innerHTML=items.map(card).join('')||'<p class="muted">Visit an experience and it will show up here.</p>';
+  $('recentGames').querySelectorAll('.game').forEach(el=>el.onclick=()=>visit(el.dataset.id,games));
+}
+$('search').addEventListener('input',loadGames);
+$('register').onclick=async()=>{
+  try{await api('/api/register',{method:'POST',body:JSON.stringify({username:$('regName').value,password:$('regPass').value})});status('Account created. Sign in to continue.');$('loginName').value=$('regName').value;$('loginPass').value=$('regPass').value}
+  catch(e){status(e.message)}
+};
+$('login').onclick=async()=>{
+  try{const d=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('loginName').value,password:$('loginPass').value})});token=d.token;localStorage.setItem('dexblocks-token',token);await refreshMe();status('Signed in successfully.');}
+  catch(e){status(e.message)}
+};
+$('logout').onclick=()=>{token='';currentUser=null;localStorage.removeItem('dexblocks-token');disconnectChat();updateWho();status('Signed out.')};
+$('createGame').onclick=async()=>{
+  try{const g=await api('/api/games',{method:'POST',body:JSON.stringify({title:$('gameTitle').value,description:$('gameDescription').value,category:$('gameCategory').value})});$('gameTitle').value='';$('gameDescription').value='';$('gameCategory').value='';$('uploadStatus').textContent='Created '+g.title;await loadGames();showPage('home')}
+  catch(e){$('uploadStatus').textContent=e.message}
+};
+$('uploadFile').onclick=async()=>{
+  const f=$('rbxfile').files[0];if(!f){$('uploadStatus').textContent='Choose an .rbxm or .rbxl file first.';return}
+  const form=new FormData();form.append('file',f);
+  try{const d=await api('/api/studio/upload',{method:'POST',body:form});$('uploadStatus').textContent=`Stored ${d.originalName} (${d.size} bytes). ${d.note}`;loadFiles()}
+  catch(e){$('uploadStatus').textContent=e.message}
+};
+async function loadFiles(){
+  try{const files=await api('/api/studio/files');$('files').innerHTML=files.map(f=>`<li>${esc(f.name)} — ${(f.size/1024).toFixed(1)} KB</li>`).join('')||'<li>No uploads yet.</li>'}
+  catch(e){$('files').innerHTML=`<li>${esc(e.message)}</li>`}
+}
+$('refreshFiles').onclick=loadFiles;
+function disconnectChat(){if(socket){socket.disconnect();socket=null}$('socketState').textContent='sign in to connect'}
+function connectChat(){
+  if(!token||socket)return;
+  socket=io({auth:{token}});
+  socket.on('connect',()=>{$('socketState').textContent='connected';socket.emit('joinRoom',activeGameId?'game-'+activeGameId:($('room').value||'lobby'));if(activeGameId)sendMyPosition()});
+  socket.on('disconnect',()=>{$('socketState').textContent='disconnected'});
+  socket.on('connect_error',e=>{$('socketState').textContent=e.message});
+  socket.on('system',d=>addChat('DexBlocks',d.message,'system'));
+  socket.on('chat',m=>addChat(m.username,m.message,m.role,m.verified));
+  socket.on('chat',m=>{
+    if(activeGameId) {
+      addGameChat(m.username,m.message,m.role,m.verified);
+      showHeadChat(m.username,m.message);
+    }
+  });
+  socket.on('chatError',d=>addChat('Chat',d.message,'system'));
+  socket.on('chatError',d=>{if(activeGameId)addGameChat('Chat',d.message)});
+  socket.on('system',d=>{if(activeGameId)addGameChat('DexBlocks',d.message)});
+  socket.on('playerList', people => {
+    remotePlayers.clear();
+    for (const p of (Array.isArray(people) ? people : [])) {
+      if (p && p.id && p.username !== currentUser?.username) {
+        remotePlayers.set(p.id, p);
+      }
+    }
+    drawWorld();
+  });
+  socket.on('playerJoin', p => {
+    if (p && p.id && p.username !== currentUser?.username) {
+      remotePlayers.set(p.id, p);
+      drawWorld();
+    }
+  });
+  socket.on('playerMove',p=>{if(p&&p.id&&p.id!==myPlayerId){remotePlayers.set(p.id,p);drawWorld()}});
+  socket.on('playerLeft',p=>{if(p&&p.id){remotePlayers.delete(p.id);drawWorld()}});
+}
+function addChat(name,msg,role,verified=false){
+  const el=document.createElement('div');el.className='chatmsg';
+  el.innerHTML=`<strong>${esc(name)} ${role==='owner'||role==='admin'?'<span class="badge">ADMIN</span>':''} ${verified?'<span class="badge verified">✓ VERIFIED</span>':''}</strong>${esc(msg)}`;
+  $('chatlog').appendChild(el);$('chatlog').scrollTop=$('chatlog').scrollHeight;
+}
+$('joinRoom').onclick=()=>{if(!socket)return alert('Sign in first.');socket.emit('joinRoom',$('room').value)};
+function sendChat(){if(!socket)return alert('Sign in first.');const msg=$('chatInput').value;socket.emit('chat',msg);$('chatInput').value=''}
+$('sendChat').onclick=sendChat;$('chatInput').addEventListener('keydown',e=>{if(e.key==='Enter')sendChat()});
+$('loadUsers').onclick=async()=>{
+  try{
+    const users=await api('/api/admin/users');
+    $('users').innerHTML=users.map(u=>`<div class="userrow"><span>${esc(u.username)} ${u.verified?'<span class="badge verified">✓ VERIFIED</span>':''} <span class="muted">${esc(u.role)}</span></span><button data-user="${esc(u.username)}" data-verified="${!u.verified}" class="secondary">${u.verified?'Remove verified':'Verify'}</button></div>`).join('');
+    $('users').querySelectorAll('button[data-user]').forEach(b=>b.onclick=async()=>{try{await api('/api/admin/users/'+encodeURIComponent(b.dataset.user)+'/verify',{method:'POST',body:JSON.stringify({verified:b.dataset.verified==='true'})});$('loadUsers').click()}catch(e){alert(e.message)}});
+  }catch(e){$('users').textContent=e.message}
+};
+refreshMe();loadGames();
+
+
+
+// DexBlocks 3D game engine
+let activeGameId = null, activeGame = null;
+let myPlayerId = 'local-' + Math.random().toString(36).slice(2);
+let myPlayer = {x:450,y:260};
+let remotePlayers = new Map();
+let worldFrame = 0;
+let heldKeys = new Set();
+const world = $('world');
+let renderer, scene, camera, clock, avatar, ground;
+let remoteMeshes = new Map();
+let gameObjects = [];
+let gameChatReady = false;
+
+function makeAvatar(color) {
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({color});
+  const skin = new THREE.MeshStandardMaterial({color:0xe5b995});
+  const dark = new THREE.MeshStandardMaterial({color:0x252834});
+  function part(w,h,d,y,material,x=0,z=0) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material);
+    mesh.position.set(x,y,z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    return mesh;
+  }
+  part(.75,.9,.4,1.25,mat);
+  part(.62,.62,.62,2,skin);
+  part(.22,.18,.12,2.08,dark,-.16,-.31);
+  part(.22,.18,.12,2.08,dark,.16,-.31);
+  part(.25,.65,.3,.48,dark,-.2,0);
+  part(.25,.65,.3,.48,dark,.2,0);
+  part(.22,.7,.25,1.3,mat,-.49,0);
+  part(.22,.7,.25,1.3,mat,.49,0);
+  return group;
+}
+
+function setupGameChat() {
+  if (gameChatReady) return;
+  gameChatReady = true;
+
+  const form = $('gameChatForm');
+  const input = $('gameChatInput');
+  const panel = $('rbxChatPanel');
+  const toggle = $('rbxChatButton');
+
+  if (form) {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      sendGameChat();
+    }, true);
+  }
+
+  if (input) {
+    input.addEventListener('keydown', function(e) {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (form) form.requestSubmit();
+        else sendGameChat();
+      }
+    }, true);
+  }
+
+  if (toggle && panel) {
+    toggle.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      panel.classList.toggle('hidden');
+    });
+  }
+}
+
+function sendGameChat() {
+  const input=$('gameChatInput');
+  if(!socket || !socket.connected) {
+    addGameChat('DexBlocks','sign in to use game chat');
+    return;
+  }
+  const msg=input.value.trim();
+  if(!msg) return;
+  socket.emit('chat',msg);
+  input.value='';
+}
+
+function addGameChat(name,msg,role,verified=false) {
+  const log=$('gameChatLog');
+  if(!log) return;
+  const row=document.createElement('div');
+  row.style.cssText='padding:5px 0;border-bottom:1px solid #292a34;overflow-wrap:anywhere';
+  const who=document.createElement('strong');
+  who.textContent=name+': ';
+  const body=document.createElement('span');
+  body.textContent=msg;
+  row.append(who,body);
+  log.appendChild(row);
+  while(log.children.length>80) log.firstChild.remove();
+  log.scrollTop=log.scrollHeight;
+}
+
+
+function updateHeadChatBubbles() {
+  const bubbles = window.headChatBubbles;
+  if (!bubbles || !camera) return;
+
+  const cameraWorld = camera.getWorldQuaternion(new THREE.Quaternion());
+
+  for (const bubble of bubbles.values()) {
+    if (!bubble.parent) continue;
+
+    const parentWorld = bubble.parent.getWorldQuaternion(new THREE.Quaternion());
+    bubble.quaternion.copy(parentWorld.invert().multiply(cameraWorld));
+  }
+}
+
+function showHeadChat(username, message) {
+  if (!scene || !activeGameId) return;
+  const text = String(message || '').trim().slice(0, 100);
+  if (!text) return;
+
+  let target = null;
+  if (username === currentUser?.username) {
+    target = avatar;
+  } else {
+    for (const [id, person] of remotePlayers) {
+      if (person.username === username) {
+        target = remoteMeshes.get(id);
+        break;
+      }
+    }
+  }
+  if (!target) return;
+
+  if (!window.headChatBubbles) window.headChatBubbles = new Map();
+  const bubbles = window.headChatBubbles;
+  const previous = bubbles.get(username);
+  if (previous) {
+    previous.parent?.remove(previous);
+    previous.geometry.dispose();
+    previous.material.map?.dispose();
+    previous.material.dispose();
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'white';
+  ctx.strokeStyle = '#333344';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.roundRect(5, 5, 502, 118, 20);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#171721';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let shown = text;
+  while (ctx.measureText(shown).width > 460 && shown.length > 4)
+    shown = shown.slice(0, -4) + '...';
+  ctx.fillText(shown, 256, 64);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture, transparent: true, depthTest: false, side: THREE.DoubleSide
+  });
+  const bubble = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.85), material);
+  bubble.position.set(0, 2.5, 0);
+  bubble.renderOrder = 999;
+  target.add(bubble);
+  bubbles.set(username, bubble);
+
+  setTimeout(() => {
+    if (bubbles.get(username) !== bubble) return;
+    bubble.parent?.remove(bubble);
+    bubbles.delete(username);
+    bubble.geometry.dispose();
+    texture.dispose();
+    material.dispose();
+  }, 5000);
+}
+
+function drawWorld() {
+  if(!renderer || !scene || !camera) return;
+  updateHeadChatBubbles();
+  renderer.render(scene,camera);
+  const list=$('playerList');
+  if(!list) return;
+  list.innerHTML='';
+  const people=[{id:myPlayerId,username:currentUser?.username||'you',color:'#8b78ff'},...remotePlayers.values()];
+  for(const person of people) {
+    const row=document.createElement('div');
+    row.className='player-row';
+    const dot=document.createElement('span');
+    dot.className='player-dot';
+    dot.style.background=person.color||'#e39a53';
+    const name=document.createElement('span');
+    name.textContent=(person.username||'player')+(person.id===myPlayerId?' (you)':'');
+    row.append(dot,name);
+    list.appendChild(row);
+  }
+}
+
+function sendMyPosition() {
+  if(!socket || !socket.connected || !activeGameId || !currentUser) return;
+  socket.emit('playerMove',{x:myPlayer.x,y:myPlayer.y});
+}
+
+function buildWorld() {
+  if(renderer) {
+    renderer.dispose();
+    renderer=null;
+  }
+  scene=new THREE.Scene();
+  scene.background=new THREE.Color('#91b9d2');
+  scene.fog=new THREE.Fog('#91b9d2',28,85);
+  camera=new THREE.PerspectiveCamera(70,1,.1,200);
+  clock=new THREE.Clock();
+
+  renderer=new THREE.WebGLRenderer({canvas:world,antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  renderer.shadowMap.enabled=true;
+  renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+  renderer.outputColorSpace=THREE.SRGBColorSpace;
+
+  scene.add(new THREE.HemisphereLight(0xdceeff,0x65734d,2));
+  const sun=new THREE.DirectionalLight(0xfff0d8,3);
+  sun.position.set(-12,22,10);
+  sun.castShadow=true;
+  sun.shadow.mapSize.set(2048,2048);
+  scene.add(sun);
+
+  const grass=new THREE.MeshStandardMaterial({color:'#6d9b59'});
+  ground=new THREE.Mesh(new THREE.BoxGeometry(100,1,100),grass);
+  ground.position.y=-.55;
+  ground.receiveShadow=true;
+  scene.add(ground);
+
+  const pathMat=new THREE.MeshStandardMaterial({color:'#b9a17a'});
+  const road=new THREE.Mesh(new THREE.BoxGeometry(8,.04,100),pathMat);
+  road.position.set(0,-.01,0);
+  road.receiveShadow=true;
+  scene.add(road);
+  const cross=new THREE.Mesh(new THREE.BoxGeometry(100,.04,7),pathMat);
+  cross.position.set(0,0,0);
+  scene.add(cross);
+
+  const mats=['#789b55','#7e8e9d','#b68b62','#a7a7a7','#547c9a'].map(
+    c=>new THREE.MeshStandardMaterial({color:c,roughness:.9})
+  );
+  let seed=42;
+  const rand=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296};
+  for(let i=0;i<100;i++) {
+    let x=(rand()-.5)*75,z=(rand()-.5)*75;
+    if(Math.abs(x)<7 || Math.abs(z)<5) continue;
+    const h=1+rand()*4;
+    const mesh=new THREE.Mesh(new THREE.BoxGeometry(1.5+rand()*2,h,1.5+rand()*2),mats[i%mats.length]);
+    mesh.position.set(x,h/2,z);
+    mesh.castShadow=true;
+    mesh.receiveShadow=true;
+    scene.add(mesh);
+    gameObjects.push(mesh);
+  }
+
+  avatar=makeAvatar('#8b78ff');
+  scene.add(avatar);
+  for(const mesh of remoteMeshes.values()) scene.remove(mesh);
+  remoteMeshes.clear();
+
+  for(const person of remotePlayers.values()) {
+    const mesh=makeAvatar(person.color||'#e39a53');
+    scene.add(mesh);
+    remoteMeshes.set(person.id,mesh);
+  }
+  resizeGame();
+  updateAvatarPosition();
+  drawWorld();
+}
+
+let cameraYaw = 0.65;
+let cameraPitch = 0.28;
+let cameraDistance = 8;
+let moveVelocityX = 0;
+let moveVelocityZ = 0;
+let playerHeight = 0;
+let verticalVelocity = 0;
+let grounded = true;
+let mouseDragging = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
+
+function updateAvatarPosition() {
+  if (!avatar || !camera) return;
+
+  avatar.position.set(
+    (myPlayer.x - 450) / 25,
+    playerHeight,
+    (myPlayer.y - 260) / 25
+  );
+
+  const pitch = Math.max(-0.25, Math.min(0.9, cameraPitch));
+  const horizontal = Math.cos(pitch) * cameraDistance;
+  const desired = new THREE.Vector3(
+    avatar.position.x + Math.sin(cameraYaw) * horizontal,
+    playerHeight + (cameraDistance < 1 ? 1.55 : 2.8) + Math.sin(pitch) * cameraDistance,
+    avatar.position.z + Math.cos(cameraYaw) * horizontal
+  );
+
+  const blend = 1 - Math.exp(-10 / 60);
+  camera.position.lerp(desired, blend);
+  camera.lookAt(
+    avatar.position.x,
+    playerHeight + 1.35,
+    avatar.position.z
+  );
+}
+
+function resizeGame() {
+  if(!renderer || !camera || !$('playModal') || $('playModal').classList.contains('hidden')) return;
+  const stage=$('world').parentElement;
+  const w=Math.max(1,stage.clientWidth),h=Math.max(1,stage.clientHeight);
+  renderer.setSize(w,h,false);
+  camera.aspect=w/h;
+  camera.updateProjectionMatrix();
+  drawWorld();
+}
+
+function openGame(game) {
+  activeGame=game;
+  activeGameId=game.id;
+  myPlayer={x:450,y:260}; playerHeight=0; verticalVelocity=0; grounded=true;
+  remotePlayers.clear();
+  $('playTitle').textContent=game.title;
+  $('playStatus').textContent=currentUser?'connecting to multiplayer...':'solo mode · sign in for multiplayer';
+  $('playModal').classList.remove('hidden');
+  setupPauseMenu();
+  if (pauseMenu) pauseMenu.style.display = 'none';
+  setupGameChat();
+  if($('gameChatLog')) $('gameChatLog').innerHTML='';
+  if(socket && socket.connected) socket.emit('joinRoom','game-'+game.id);
+  buildWorld();
+  if(worldFrame) cancelAnimationFrame(worldFrame);
+  gameLoop();
+  resizeGame();
+}
+
+
+let pauseMenu = null;
+
+function setupPauseMenu() {
+  if (pauseMenu) return;
+  const modal = $('playModal');
+  if (!modal) return;
+
+  pauseMenu = document.createElement('div');
+  pauseMenu.id = 'dexPauseMenu';
+  pauseMenu.innerHTML = `
+    <div class="dex-pause-card">
+      <h2>game paused</h2>
+      <button type="button" id="dexResume">resume</button>
+      <button type="button" id="dexPauseLeave">leave game</button>
+      <p>press escape to resume</p>
+    </div>`;
+  pauseMenu.style.display = 'none';
+  modal.appendChild(pauseMenu);
+
+  $('dexResume').addEventListener('click', () => {
+    pauseMenu.style.display = 'none';
+    heldKeys.clear();
+  });
+  $('dexPauseLeave').addEventListener('click', () => {
+    pauseMenu.style.display = 'none';
+    closeGame();
+  });
+}
+
+function closeGame() {
+  activeGameId=null;
+  activeGame=null;
+  heldKeys.clear();
+  remotePlayers.clear();
+  if(socket && socket.connected) socket.emit('joinRoom',$('room').value||'lobby');
+  $('playModal').classList.add('hidden');
+  if(worldFrame) cancelAnimationFrame(worldFrame);
+  worldFrame=0;
+}
+
+$('leaveGame').onclick=closeGame;
+window.addEventListener('resize',resizeGame);
+window.addEventListener('keydown',e=>{
+  if(!activeGameId) return;
+  if(e.key === 'Escape') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    setupPauseMenu();
+    if (pauseMenu) {
+      pauseMenu.style.display =
+        pauseMenu.style.display === 'none' ? 'flex' : 'none';
+    }
+    heldKeys.clear();
+    return;
+  }
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  if (!['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) {
+    heldKeys.add(e.key.toLowerCase());
+  }
+});
+window.addEventListener('keyup',e=>heldKeys.delete(e.key.toLowerCase()));
+
+window.addEventListener('blur',()=>{heldKeys.clear();mouseDragging=false;});
+
+if (world) {
+  world.style.cursor = 'grab';
+
+  world.addEventListener('contextmenu', e => e.preventDefault());
+
+  world.addEventListener('pointerdown', e => {
+    if (!activeGameId || e.button !== 2) return;
+    e.preventDefault();
+    mouseDragging = true;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    world.setPointerCapture?.(e.pointerId);
+    world.requestPointerLock?.();
+    world.style.cursor = 'grabbing';
+  });
+
+  world.addEventListener('pointermove', e => {
+    if (!mouseDragging || !activeGameId) return;
+
+    cameraYaw -= (document.pointerLockElement === world ? e.movementX : e.clientX - lastMouseX) * 0.006;
+    cameraPitch = Math.max(-0.25, Math.min(0.9,
+      cameraPitch + (document.pointerLockElement === world ? e.movementY : e.clientY - lastMouseY) * 0.004
+    ));
+
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+  });
+
+  const stopDragging = () => {
+    mouseDragging = false;
+    world.style.cursor = 'grab';
+    if (document.pointerLockElement === world) document.exitPointerLock?.();
+  };
+
+  world.addEventListener('pointerup', stopDragging);
+  world.addEventListener('pointercancel', stopDragging);
+
+  world.addEventListener('wheel', e => {
+    if (!activeGameId) return;
+    e.preventDefault();
+    cameraDistance = Math.max(0.15, Math.min(16,
+      cameraDistance + e.deltaY * 0.012
+    ));
+  }, { passive: false });
+}
+
+
+function animateJumpArms() {
+  if (!avatar) return;
+  const jumping = !grounded || playerHeight > 0.05;
+  avatar.traverse(part => {
+    if (!part.isMesh || !part.name) return;
+    const name = part.name.toLowerCase();
+    if (!name.includes('arm')) return;
+    if (!part.userData.jumpArmRotation) {
+      part.userData.jumpArmRotation = part.rotation.x;
+    }
+    const target = jumping ? -Math.PI * 0.8 : part.userData.jumpArmRotation;
+    part.rotation.x += (target - part.rotation.x) * 0.22;
+  });
+}
+
+function gameLoop() {
+  if(!activeGameId || !renderer) return;
+  const delta=Math.min(clock.getDelta(),.05);
+  let forward=0,side=0;
+  if(heldKeys.has('w')||heldKeys.has('arrowup')) forward+=1;
+  if(heldKeys.has('s')||heldKeys.has('arrowdown')) forward-=1;
+  if(heldKeys.has('a')||heldKeys.has('arrowleft')) side-=1;
+  if(heldKeys.has('d')||heldKeys.has('arrowright')) side+=1;
+
+  if((heldKeys.has(' ')||heldKeys.has('space')) && grounded) {
+    verticalVelocity=8.5;
+    grounded=false;
+  }
+  verticalVelocity-=22*delta;
+  playerHeight+=verticalVelocity*delta;
+  if(playerHeight<=0) {
+    playerHeight=0;
+    verticalVelocity=0;
+    grounded=true;
+  }
+
+  if (forward || side) {
+    const length = Math.hypot(forward, side) || 1;
+    forward /= length;
+    side /= length;
+  }
+
+  const desiredVX =
+    (-Math.sin(cameraYaw) * forward + Math.cos(cameraYaw) * side) * 7;
+  const desiredVZ =
+    (-Math.cos(cameraYaw) * forward - Math.sin(cameraYaw) * side) * 7;
+
+  const accelerating = forward !== 0 || side !== 0;
+  const blend = 1 - Math.exp(-(accelerating ? 16 : 20) * delta);
+  moveVelocityX += (desiredVX - moveVelocityX) * blend;
+  moveVelocityZ += (desiredVZ - moveVelocityZ) * blend;
+
+  if (!accelerating && Math.hypot(moveVelocityX, moveVelocityZ) < 0.04) {
+    moveVelocityX = 0;
+    moveVelocityZ = 0;
+  }
+
+  const moveX = moveVelocityX * delta;
+  const moveZ = moveVelocityZ * delta;
+  let x = (myPlayer.x - 450) / 25;
+  let z = (myPlayer.y - 260) / 25;
+
+  const canMove = (nx, nz) => {
+    if (Math.abs(nx) > 19 || Math.abs(nz) > 19) return false;
+    const radius = 0.48;
+
+    for (const object of gameObjects) {
+      const bounds = new THREE.Box3().setFromObject(object);
+      if (nx + radius > bounds.min.x && nx - radius < bounds.max.x &&
+          nz + radius > bounds.min.z && nz - radius < bounds.max.z) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  if (canMove(x + moveX, z)) x += moveX;
+  else moveVelocityX = 0;
+
+  if (canMove(x, z + moveZ)) z += moveZ;
+  else moveVelocityZ = 0;
+
+  myPlayer.x = 450 + x * 25;
+  myPlayer.y = 260 + z * 25;
+
+  if (avatar && Math.hypot(moveVelocityX, moveVelocityZ) > 0.1) {
+    const desiredYaw = Math.atan2(-moveVelocityX, -moveVelocityZ);
+    let angle = desiredYaw - avatar.rotation.y;
+    angle = Math.atan2(Math.sin(angle), Math.cos(angle));
+    avatar.rotation.y += angle * (1 - Math.exp(-12 * delta));
+    if (Math.floor(performance.now() / 100) % 2 === 0) sendMyPosition();
+  }
+  updateAvatarPosition();
+
+  for(const [id,p] of remotePlayers) {
+    let mesh=remoteMeshes.get(id);
+    if(!mesh) {
+      mesh=makeAvatar(p.color||'#e39a53');
+      scene.add(mesh);
+      remoteMeshes.set(id,mesh);
+    }
+    mesh.position.set((p.x-450)/25,0,(p.y-260)/25);
+  }
+  for(const [id,mesh] of remoteMeshes) {
+    if(!remotePlayers.has(id)) {
+      scene.remove(mesh);
+      remoteMeshes.delete(id);
+    }
+  }
+  updateHeadChatBubbles();
+  renderer.render(scene,camera);
+  worldFrame=requestAnimationFrame(gameLoop);
+}
+
+// Keep multiplayer events connected to the 3D scene and in-game chat.
+if(socket) {
+  socket.on('playerMove',p=>{
+    if(p && p.id && p.id!==myPlayerId) {
+      remotePlayers.set(p.id,p);
+      drawWorld();
+    }
+  });
+  socket.on('playerLeft',p=>{
+    if(p && p.id) {
+      remotePlayers.delete(p.id);
+      drawWorld();
+    }
+  });
+}
+
+
+/* mandatory DexBlocks account gate */
+function updateAuthGate() {
+  const gate = $('authGate');
+  if (!gate) return;
+  const allowed = !!(token && currentUser);
+  gate.classList.toggle('hidden', allowed);
+  document.body.classList.toggle('auth-locked', !allowed);
+  if (!allowed) {
+    $('gateLoginError').textContent = '';
+    $('gateLoginName').focus({preventScroll:true});
+  }
+}
+function showGateForm(which) {
+  const login = which === 'login';
+  $('gateLogin').classList.toggle('hidden', !login);
+  $('gateRegister').classList.toggle('hidden', login);
+  $('gateHeading').textContent = login ? 'Sign in to DexBlocks' : 'Create your account';
+  $('gateDescription').textContent = login
+    ? 'Sign in to continue to your games.'
+    : 'Create an account to start playing.';
+  $('gateLoginError').textContent = '';
+  $('gateRegisterError').textContent = '';
+}
+$('showGateRegister').onclick = () => showGateForm('register');
+$('showGateLogin').onclick = () => showGateForm('login');
+
+
+$('gateTestButton').onclick = async () => {
+  const button = $('gateTestButton');
+  const error = $('gateLoginError');
+  button.disabled = true;
+  if (error) error.textContent = 'Signing in...';
+  try {
+    const result = await api('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({username: 'DexBlocksTest', password: 'DexBlocksTest2026!'})
+    });
+    if (!result.token || !result.user) throw new Error('Invalid login response.');
+    token = result.token;
+    currentUser = result.user;
+    localStorage.setItem('dexblocks-token', token);
+    updateWho();
+    updateAuthGate();
+    if (error) error.textContent = '';
+  } catch (e) {
+    if (error) error.textContent = e.message || 'Test sign-in failed.';
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('gateLoginButton').onclick = async () => {
+  const button = $('gateLoginButton');
+  button.disabled = true;
+  $('gateLoginError').textContent = '';
+  try {
+    const result = await api('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: $('gateLoginName').value.trim(),
+        password: $('gateLoginPass').value
+      })
+    });
+    if (!result.token || !result.user) throw new Error('Invalid login response.');
+    token = result.token;
+    currentUser = result.user;
+    localStorage.setItem('dexblocks-token', token);
+    updateWho();
+    updateAuthGate();
+    status('Signed in successfully.');
+  } catch (e) {
+    $('gateLoginError').textContent = e.message || 'Sign in failed.';
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('gateRegisterButton').onclick = async () => {
+  const button = $('gateRegisterButton');
+  const username = $('gateRegisterName').value.trim();
+  const password = $('gateRegisterPass').value;
+  const confirm = $('gateRegisterConfirm').value;
+  $('gateRegisterError').textContent = '';
+  if (password !== confirm) {
+    $('gateRegisterError').textContent = 'Passwords do not match.';
+    return;
+  }
+  button.disabled = true;
+  try {
+    await api('/api/register', {
+      method: 'POST',
+      body: JSON.stringify({username, password})
+    });
+    const result = await api('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({username, password})
+    });
+    if (!result.token || !result.user) throw new Error('Account created, but sign-in response was invalid.');
+    token = result.token;
+    currentUser = result.user;
+    localStorage.setItem('dexblocks-token', token);
+    updateWho();
+    updateAuthGate();
+    status('Account created and signed in.');
+  } catch (e) {
+    $('gateRegisterError').textContent = e.message || 'Account creation failed.';
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('gateLoginPass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('gateLoginButton').click();
+});
+$('gateRegisterConfirm').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('gateRegisterButton').click();
+});
+
+/* Refresh account state and unlock only after a successful sign-in. */
+const dexblocksOriginalRefreshMe = refreshMe;
+refreshMe = async function() {
+  await dexblocksOriginalRefreshMe();
+  updateAuthGate();
+};
+updateAuthGate();
+refreshMe();
+
+
+/* Local DexBlocks settings */
+function applyDexSettings(){
+  const reduced=localStorage.getItem('dexblocks-reduced-motion')==='true';
+  const chat=localStorage.getItem('dexblocks-game-chat')!=='false';
+  const motionInput=$('settingReducedMotion');
+  const chatInput=$('settingGameChat');
+  if(motionInput) motionInput.checked=reduced;
+  if(chatInput) chatInput.checked=chat;
+  document.documentElement.classList.toggle('reduced-motion',reduced);
+  if(reduced) document.documentElement.style.scrollBehavior='auto';
+}
+if($('settingReducedMotion')){
+  $('settingReducedMotion').addEventListener('change',e=>{
+    localStorage.setItem('dexblocks-reduced-motion',String(e.target.checked));
+    applyDexSettings();
+  });
+}
+if($('settingGameChat')){
+  $('settingGameChat').addEventListener('change',e=>{
+    localStorage.setItem('dexblocks-game-chat',String(e.target.checked));
+  });
+}
+applyDexSettings();
+
+/* working dexblocks pause menu */
+(() => {
+  if (window.__dexPauseInstalled) return;
+  window.__dexPauseInstalled = true;
+
+  function setupPauseMenu() {
+    if (document.getElementById('dexblocksPause')) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'dexblocksPause';
+    overlay.innerHTML = `
+      <div class="dex-pause-screen">
+        <header class="dex-pause-header">
+          <div class="dex-pause-top-actions">
+            <button id="dexPauseLeave">Leave</button>
+            <button id="dexPauseReset">Reset</button>
+            <button id="dexPauseResume">Resume</button>
+          </div>
+          <div class="dex-pause-game-info">
+            <span id="dexPauseGameName">Your Game</span>
+            <span id="dexPausePlayers">Players: 1</span>
+          </div>
+        </header>
+
+        <main id="dexPauseHome" class="dex-pause-home">
+          <h1>Paused</h1>
+          <button id="dexPauseSettingsToggle" class="dex-pause-settings-button">Settings</button>
+        </main>
+
+        <main id="dexPauseSettings" class="dex-pause-settings-page" hidden>
+          <h1>Settings</h1>
+          <section class="dex-pause-setting-row">
+            <label for="dexPauseVolume">Sound volume</label>
+            <span id="dexPauseVolumeValue">100%</span>
+            <input id="dexPauseVolume" type="range" min="0" max="100" value="100">
+          </section>
+          <button id="dexPauseSettingsBack">Back</button>
+        </main>
+
+        <footer class="dex-pause-social">
+          <div class="dex-pause-social-heading">
+            <h2>Players in this game</h2>
+            <span id="dexPausePlayerCount">1 player</span>
+          </div>
+          <div id="dexPauseFriendList" class="dex-pause-friend-list"></div>
+          <form id="dexPauseInviteForm" class="dex-pause-invite">
+            <input id="dexPauseInviteName" autocomplete="off" placeholder="Enter a username to invite">
+            <button type="submit">Add people</button>
+          </form>
+          <div id="dexPauseInviteStatus" role="status"></div>
+        </footer>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const resume = () => {
+      overlay.classList.remove('open');
+    };
+
+    document.getElementById('dexPauseResume').addEventListener('click', resume);
+
+    const settingsToggle = document.getElementById('dexPauseSettingsToggle');
+    const settingsPanel = document.getElementById('dexPauseSettings');
+    const volumeSlider = document.getElementById('dexPauseVolume');
+    const volumeValue = document.getElementById('dexPauseVolumeValue');
+
+    settingsToggle.addEventListener('click', () => {
+      document.getElementById('dexPauseHome').hidden = true;
+      settingsPanel.hidden = false;
+    });
+
+    document.getElementById('dexPauseSettingsBack').addEventListener('click', () => {
+      settingsPanel.hidden = true;
+      document.getElementById('dexPauseHome').hidden = false;
+    });
+
+    window.renderDexPausePlayers = () => {
+      const list = document.getElementById('dexPauseFriendList');
+      if (!list) return;
+      list.replaceChildren();
+
+      const people = [];
+      if (typeof currentUser !== 'undefined' && currentUser?.username) {
+        people.push({ username: currentUser.username, self: true });
+      } else {
+        people.push({ username: 'you', self: true });
+      }
+
+      if (typeof remotePlayers !== 'undefined') {
+        for (const person of remotePlayers.values()) {
+          if (person?.username && !people.some(p => p.username === person.username)) {
+            people.push({ username: person.username, self: false });
+          }
+        }
+      }
+
+      for (const person of people) {
+        const item = document.createElement('div');
+        item.className = 'dex-pause-player';
+        const name = document.createElement('span');
+        name.textContent = person.username;
+        const badge = document.createElement('span');
+        badge.className = 'dex-pause-player-badge';
+        badge.textContent = person.self ? 'YOU' : 'IN GAME';
+        item.append(name, badge);
+        list.appendChild(item);
+      }
+
+      const count = document.getElementById('dexPausePlayers');
+      const countBottom = document.getElementById('dexPausePlayerCount');
+      if (count) count.textContent = 'Players: ' + people.length;
+      if (countBottom) countBottom.textContent =
+        people.length + (people.length === 1 ? ' player' : ' players');
+    };
+
+    document.getElementById('dexPauseInviteForm').addEventListener('submit', e => {
+      e.preventDefault();
+      const input = document.getElementById('dexPauseInviteName');
+      const status = document.getElementById('dexPauseInviteStatus');
+      const username = input.value.trim();
+      if (!username) {
+        status.textContent = 'Enter a username first.';
+        return;
+      }
+      if (typeof socket !== 'undefined' && socket) {
+        socket.emit('invitePlayer', {
+          username,
+          gameId: typeof activeGameId !== 'undefined' ? activeGameId : null
+        });
+        status.textContent = 'Invite request sent.';
+        input.value = '';
+      } else {
+        status.textContent = 'The game server is not connected.';
+      }
+    });
+
+    volumeSlider.addEventListener('input', () => {
+      const volume = Number(volumeSlider.value) / 100;
+      volumeValue.textContent = volumeSlider.value + '%';
+
+      document.querySelectorAll('audio, video').forEach(media => {
+        media.volume = volume;
+      });
+
+      if (window.Howler && typeof window.Howler.volume === 'function') {
+        window.Howler.volume(volume);
+      }
+    });
+
+    document.getElementById('dexPauseReset').addEventListener('click', () => {
+      if (typeof myPlayer !== 'undefined') {
+        myPlayer.x = 450;
+        myPlayer.y = 260;
+      }
+
+      if (typeof playerHeight !== 'undefined') playerHeight = 0;
+      if (typeof verticalVelocity !== 'undefined') verticalVelocity = 0;
+      if (typeof grounded !== 'undefined') grounded = true;
+      if (typeof moveVelocityX !== 'undefined') moveVelocityX = 0;
+      if (typeof moveVelocityZ !== 'undefined') moveVelocityZ = 0;
+
+      if (typeof updateAvatarPosition === 'function') updateAvatarPosition();
+      if (typeof sendMyPosition === 'function') sendMyPosition();
+
+      overlay.classList.remove('open');
+    });
+
+    document.getElementById('dexPauseLeave').addEventListener('click', () => {
+      overlay.classList.remove('open');
+
+      // Use the existing leave/exit control so the game cleanup stays intact.
+      const controls = [...document.querySelectorAll('button, [role="button"], a')]
+        .filter(el => !overlay.contains(el) && el.offsetWidth > 0 && el.offsetHeight > 0);
+
+      const leaveControl = controls.find(el =>
+        /^(leave|leave game|exit game|back to games|return to games)$/i
+          .test((el.innerText || el.textContent || '').trim())
+      );
+
+      if (leaveControl) {
+        leaveControl.click();
+        return;
+      }
+
+      for (const name of ['leaveGame', 'exitGame', 'closeGame']) {
+        if (typeof window[name] === 'function') {
+          window[name]();
+          return;
+        }
+      }
+
+      alert('Could not find the existing leave-game action. The game was not closed.');
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupPauseMenu, { once: true });
+  } else {
+    setupPauseMenu();
+  }
+
+  window.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (typeof activeGameId !== 'undefined' && !activeGameId) return;
+
+    const overlay = document.getElementById('dexblocksPause');
+    if (!overlay) return;
+
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const gameName = document.getElementById('dexPauseGameName');
+    const playersLabel = document.getElementById('dexPausePlayers');
+
+    if (gameName) {
+      const title = document.querySelector('[data-game-name], .game-title, #gameTitle');
+      gameName.textContent =
+        (title && title.textContent.trim()) ||
+        (typeof activeGameId !== 'undefined' && activeGameId ? String(activeGameId) : 'Your Game');
+    }
+
+    if (playersLabel) {
+      const count = typeof remotePlayers !== 'undefined' ? remotePlayers.size + 1 : 1;
+      playersLabel.textContent = 'Players: ' + count;
+    }
+
+    if (window.renderDexPausePlayers) window.renderDexPausePlayers();
+    overlay.classList.toggle('open');
+  }, true);
+})();
+
+/* DexBlocks clickable game details */
+(() => {
+  if (window.__dexGameDetailsInstalled) return;
+  window.__dexGameDetailsInstalled = true;
+
+  let selectedCard = null;
+  let bypass = false;
+  let vote = 0;
+
+  const cardSelector = [
+    '[data-game-id]',
+    '.game',
+    '.game-card',
+    '.game-item',
+    '.game-tile',
+    '.experience-card'
+  ].join(',');
+
+  const getTitle = card => {
+    const el = card.querySelector(
+      '[data-game-name], .game-title, .game-name, h2, h3, h4'
+    );
+    return (
+      el?.dataset.gameName ||
+      el?.textContent?.trim() ||
+      card.dataset.gameName ||
+      card.dataset.title ||
+      'Untitled game'
+    ).trim();
+  };
+
+  function setup() {
+    if (document.getElementById('dexGameDetails')) return;
+
+    const modal = document.createElement('div');
+    modal.id = 'dexGameDetails';
+    modal.innerHTML = `
+      <section class="dex-details-card">
+        <button class="dex-details-close" aria-label="Close">×</button>
+        <div class="dex-details-banner"><span>GAME</span></div>
+        <div class="dex-details-content">
+          <h2 class="dex-details-title">Game</h2>
+          <p class="dex-details-description">Ready to play?</p>
+          <div class="dex-details-actions">
+            <button class="dex-details-like">▲ Like <span>0</span></button>
+            <button class="dex-details-dislike">▼ Dislike <span>0</span></button>
+            <button class="dex-details-join">▶ Join</button>
+          </div>
+        </div>
+      </section>`;
+
+    document.body.appendChild(modal);
+
+    const close = () => {
+      modal.classList.remove('visible');
+      selectedCard = null;
+    };
+
+    modal.querySelector('.dex-details-close').onclick = close;
+    modal.addEventListener('click', e => {
+      if (e.target === modal) close();
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && modal.classList.contains('visible')) close();
+    });
+
+    function updateVoteButtons() {
+      modal.querySelector('.dex-details-like').classList.toggle('selected', vote === 1);
+      modal.querySelector('.dex-details-dislike').classList.toggle('selected', vote === -1);
+    }
+
+    function voteFor(value) {
+      if (!selectedCard) return;
+
+      const id = selectedCard.dataset.gameId ||
+        selectedCard.dataset.title ||
+        getTitle(selectedCard);
+
+      const key = 'dexblocks-vote-' + id;
+      const oldVote = vote;
+      const newVote = oldVote === value ? 0 : value;
+
+      try {
+        const counts = JSON.parse(localStorage.getItem(key + '-counts') || '{"up":0,"down":0}');
+        if (oldVote === 1) counts.up = Math.max(0, counts.up - 1);
+        if (oldVote === -1) counts.down = Math.max(0, counts.down - 1);
+        if (newVote === 1) counts.up++;
+        if (newVote === -1) counts.down++;
+        localStorage.setItem(key + '-counts', JSON.stringify(counts));
+        localStorage.setItem(key, String(newVote));
+        vote = newVote;
+        modal.querySelector('.dex-details-like span').textContent = counts.up;
+        modal.querySelector('.dex-details-dislike span').textContent = counts.down;
+      } catch {}
+      updateVoteButtons();
+    }
+
+    modal.querySelector('.dex-details-like').onclick = () => voteFor(1);
+    modal.querySelector('.dex-details-dislike').onclick = () => voteFor(-1);
+
+    modal.querySelector('.dex-details-join').onclick = () => {
+      if (!selectedCard) return;
+
+      const card = selectedCard;
+      const joinButton = card.querySelector(
+        '[data-action="join"], .join-button, .game-join, button'
+      );
+
+      close();
+      bypass = true;
+      try {
+        if (joinButton) joinButton.click();
+        else card.click();
+      } finally {
+        setTimeout(() => { bypass = false; }, 300);
+      }
+    };
+
+    document.addEventListener('click', e => {
+      if (bypass || modal.contains(e.target)) return;
+
+      const card = e.target.closest(cardSelector);
+      if (!card || !document.body.contains(card)) return;
+
+      if (e.target.closest(
+        'button, a, input, select, textarea, [data-action="join"], .join-button'
+      )) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+
+      selectedCard = card;
+      vote = 0;
+
+      const title = getTitle(card);
+      modal.querySelector('.dex-details-title').textContent = title;
+
+      const description = card.querySelector(
+        '.game-description, .game-desc, [data-game-description], p'
+      );
+      modal.querySelector('.dex-details-description').textContent =
+        description?.textContent?.trim() || 'Jump in and start playing.';
+
+      const banner = modal.querySelector('.dex-details-banner');
+      banner.replaceChildren();
+      const sourceImage = card.querySelector('img');
+      if (sourceImage?.src) {
+        const img = document.createElement('img');
+        img.src = sourceImage.src;
+        img.alt = title;
+        banner.appendChild(img);
+      } else {
+        const label = document.createElement('span');
+        label.textContent = 'GAME';
+        banner.appendChild(label);
+      }
+
+      const id = card.dataset.gameId || card.dataset.title || title;
+      try {
+        const counts = JSON.parse(
+          localStorage.getItem('dexblocks-vote-' + id + '-counts') ||
+          '{"up":0,"down":0}'
+        );
+        vote = Number(localStorage.getItem('dexblocks-vote-' + id) || 0);
+        modal.querySelector('.dex-details-like span').textContent = counts.up || 0;
+        modal.querySelector('.dex-details-dislike span').textContent = counts.down || 0;
+      } catch {}
+
+      updateVoteButtons();
+      modal.classList.add('visible');
+    }, true);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setup, { once: true });
+  } else {
+    setup();
+  }
+})();
+
+
+/* Persist DexBlocks download links */
+(() => {
+  const key = 'dexblocks-saved-downloads';
+  document.addEventListener('click', e => {
+    const a = e.target.closest('a[download], a[href]');
+    if (!a || !/download|file/i.test((a.textContent || '') + ' ' + a.href)) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || '[]');
+      const item = { name: (a.download || a.textContent || 'download').trim(), url: a.href };
+      if (!saved.some(x => x.url === item.url)) saved.push(item);
+      localStorage.setItem(key, JSON.stringify(saved));
+    } catch (_) {}
+  }, true);
+})();

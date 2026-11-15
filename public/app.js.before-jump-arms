@@ -1,0 +1,882 @@
+let token = localStorage.getItem('dexblocks-token') || '';
+let currentUser = null;
+let socket = null;
+let recent = JSON.parse(localStorage.getItem('dexblocks-recent') || '[]');
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(url, options={}) {
+  const headers = {...(options.headers||{})};
+  if (token) headers.Authorization = 'Bearer ' + token;
+  if (options.body && !(options.body instanceof FormData)) headers['Content-Type']='application/json';
+  const r=await fetch(url,{...options,headers});
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(data.error || 'Request failed.');
+  return data;
+}
+function status(msg){$('accountStatus').textContent=msg}
+function showPage(page){
+  document.querySelectorAll('.page').forEach(p=>p.classList.toggle('hidden',p.id!==page));
+  document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
+  if(page==='recent') renderRecent();
+  if(page==='studio'&&token) loadFiles();
+}
+document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>showPage(b.dataset.page));
+if ($('explore')) $('explore').onclick=()=>{showPage('home');$('games')?.scrollIntoView({behavior:'smooth'})};
+async function refreshMe(){
+  if(!token){currentUser=null;updateWho();disconnectChat();return}
+  try{currentUser=await api('/api/me');updateWho();connectChat()}
+  catch{token='';localStorage.removeItem('dexblocks-token');currentUser=null;updateWho();disconnectChat()}
+}
+function updateWho(){
+  const u=currentUser;
+  $('who').innerHTML=u?`${esc(u.username)} ${u.verified?'<span class="badge verified">✓ VERIFIED</span>':''} ${['owner','admin'].includes(u.role)?'<span class="badge">ADMIN</span>':''}`:'not signed in';
+}
+function card(g){
+  const isRecent=recent.includes(g.id);
+  return `<article class="game" data-id="${esc(g.id)}"><div class="cover">${esc(g.title.slice(0,2).toUpperCase())}</div><div class="gamebody"><h3>${esc(g.title)}</h3><p>${esc(g.description||'A DexBlocks experience.')}</p><div class="meta"><span>${esc(g.category||'Community')}</span><span>${Number(g.visits||0).toLocaleString()} visits</span></div><div class="meta"><span>by ${esc(g.owner||'Dexblocks')}</span><span>${isRecent?'RECENT':'PLAY'}</span></div></div></article>`;
+}
+async function loadGames(){
+  try{
+    const games=await api('/api/games');
+    const q=$('search').value.toLowerCase();
+    const filtered=games.filter(g=>(g.title+' '+g.description+' '+g.category+' '+g.owner).toLowerCase().includes(q));
+    $('games').innerHTML=filtered.map(card).join('')||'<p class="muted">No experiences found.</p>';
+    $('games').querySelectorAll('.game').forEach(el=>el.onclick=()=>visit(el.dataset.id,games));
+    renderRecent(games);
+  }catch(e){$('games').innerHTML=`<p class="muted">${esc(e.message)}</p>`}
+}
+async function visit(id,games){
+  try {
+    const list = games || await api('/api/games');
+    const game = list.find(g => g.id === id);
+    if (!game) throw new Error('Experience not found.');
+    await api('/api/games/'+encodeURIComponent(id)+'/visit',{method:'POST'});
+    recent=[id,...recent.filter(x=>x!==id)].slice(0,20);
+    localStorage.setItem('dexblocks-recent',JSON.stringify(recent));
+    await loadGames();
+    openGame(game);
+  } catch(e) { alert(e.message); }
+}
+function renderRecent(games){
+  if(!games) {api('/api/games').then(gs=>renderRecent(gs)).catch(()=>{});return}
+  const items=recent.map(id=>games.find(g=>g.id===id)).filter(Boolean);
+  $('recentGames').innerHTML=items.map(card).join('')||'<p class="muted">Visit an experience and it will show up here.</p>';
+  $('recentGames').querySelectorAll('.game').forEach(el=>el.onclick=()=>visit(el.dataset.id,games));
+}
+$('search').addEventListener('input',loadGames);
+$('register').onclick=async()=>{
+  try{await api('/api/register',{method:'POST',body:JSON.stringify({username:$('regName').value,password:$('regPass').value})});status('Account created. Sign in to continue.');$('loginName').value=$('regName').value;$('loginPass').value=$('regPass').value}
+  catch(e){status(e.message)}
+};
+$('login').onclick=async()=>{
+  try{const d=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('loginName').value,password:$('loginPass').value})});token=d.token;localStorage.setItem('dexblocks-token',token);await refreshMe();status('Signed in successfully.');}
+  catch(e){status(e.message)}
+};
+$('logout').onclick=()=>{token='';currentUser=null;localStorage.removeItem('dexblocks-token');disconnectChat();updateWho();status('Signed out.')};
+$('createGame').onclick=async()=>{
+  try{const g=await api('/api/games',{method:'POST',body:JSON.stringify({title:$('gameTitle').value,description:$('gameDescription').value,category:$('gameCategory').value})});$('gameTitle').value='';$('gameDescription').value='';$('gameCategory').value='';$('uploadStatus').textContent='Created '+g.title;await loadGames();showPage('home')}
+  catch(e){$('uploadStatus').textContent=e.message}
+};
+$('uploadFile').onclick=async()=>{
+  const f=$('rbxfile').files[0];if(!f){$('uploadStatus').textContent='Choose an .rbxm or .rbxl file first.';return}
+  const form=new FormData();form.append('file',f);
+  try{const d=await api('/api/studio/upload',{method:'POST',body:form});$('uploadStatus').textContent=`Stored ${d.originalName} (${d.size} bytes). ${d.note}`;loadFiles()}
+  catch(e){$('uploadStatus').textContent=e.message}
+};
+async function loadFiles(){
+  try{const files=await api('/api/studio/files');$('files').innerHTML=files.map(f=>`<li>${esc(f.name)} — ${(f.size/1024).toFixed(1)} KB</li>`).join('')||'<li>No uploads yet.</li>'}
+  catch(e){$('files').innerHTML=`<li>${esc(e.message)}</li>`}
+}
+$('refreshFiles').onclick=loadFiles;
+function disconnectChat(){if(socket){socket.disconnect();socket=null}$('socketState').textContent='sign in to connect'}
+function connectChat(){
+  if(!token||socket)return;
+  socket=io({auth:{token}});
+  socket.on('connect',()=>{$('socketState').textContent='connected';socket.emit('joinRoom',activeGameId?'game-'+activeGameId:($('room').value||'lobby'));if(activeGameId)sendMyPosition()});
+  socket.on('disconnect',()=>{$('socketState').textContent='disconnected'});
+  socket.on('connect_error',e=>{$('socketState').textContent=e.message});
+  socket.on('system',d=>addChat('DexBlocks',d.message,'system'));
+  socket.on('chat',m=>addChat(m.username,m.message,m.role,m.verified));
+  socket.on('chat',m=>{
+    if(activeGameId) {
+      addGameChat(m.username,m.message,m.role,m.verified);
+      showHeadChat(m.username,m.message);
+    }
+  });
+  socket.on('chatError',d=>addChat('Chat',d.message,'system'));
+  socket.on('chatError',d=>{if(activeGameId)addGameChat('Chat',d.message)});
+  socket.on('system',d=>{if(activeGameId)addGameChat('DexBlocks',d.message)});
+  socket.on('playerList', people => {
+    remotePlayers.clear();
+    for (const p of (Array.isArray(people) ? people : [])) {
+      if (p && p.id && p.username !== currentUser?.username) {
+        remotePlayers.set(p.id, p);
+      }
+    }
+    drawWorld();
+  });
+  socket.on('playerJoin', p => {
+    if (p && p.id && p.username !== currentUser?.username) {
+      remotePlayers.set(p.id, p);
+      drawWorld();
+    }
+  });
+  socket.on('playerMove',p=>{if(p&&p.id&&p.id!==myPlayerId){remotePlayers.set(p.id,p);drawWorld()}});
+  socket.on('playerLeft',p=>{if(p&&p.id){remotePlayers.delete(p.id);drawWorld()}});
+}
+function addChat(name,msg,role,verified=false){
+  const el=document.createElement('div');el.className='chatmsg';
+  el.innerHTML=`<strong>${esc(name)} ${role==='owner'||role==='admin'?'<span class="badge">ADMIN</span>':''} ${verified?'<span class="badge verified">✓ VERIFIED</span>':''}</strong>${esc(msg)}`;
+  $('chatlog').appendChild(el);$('chatlog').scrollTop=$('chatlog').scrollHeight;
+}
+$('joinRoom').onclick=()=>{if(!socket)return alert('Sign in first.');socket.emit('joinRoom',$('room').value)};
+function sendChat(){if(!socket)return alert('Sign in first.');const msg=$('chatInput').value;socket.emit('chat',msg);$('chatInput').value=''}
+$('sendChat').onclick=sendChat;$('chatInput').addEventListener('keydown',e=>{if(e.key==='Enter')sendChat()});
+$('loadUsers').onclick=async()=>{
+  try{
+    const users=await api('/api/admin/users');
+    $('users').innerHTML=users.map(u=>`<div class="userrow"><span>${esc(u.username)} ${u.verified?'<span class="badge verified">✓ VERIFIED</span>':''} <span class="muted">${esc(u.role)}</span></span><button data-user="${esc(u.username)}" data-verified="${!u.verified}" class="secondary">${u.verified?'Remove verified':'Verify'}</button></div>`).join('');
+    $('users').querySelectorAll('button[data-user]').forEach(b=>b.onclick=async()=>{try{await api('/api/admin/users/'+encodeURIComponent(b.dataset.user)+'/verify',{method:'POST',body:JSON.stringify({verified:b.dataset.verified==='true'})});$('loadUsers').click()}catch(e){alert(e.message)}});
+  }catch(e){$('users').textContent=e.message}
+};
+refreshMe();loadGames();
+
+
+
+// DexBlocks 3D game engine
+let activeGameId = null, activeGame = null;
+let myPlayerId = 'local-' + Math.random().toString(36).slice(2);
+let myPlayer = {x:450,y:260};
+let remotePlayers = new Map();
+let worldFrame = 0;
+let heldKeys = new Set();
+const world = $('world');
+let renderer, scene, camera, clock, avatar, ground;
+let remoteMeshes = new Map();
+let gameObjects = [];
+let gameChatReady = false;
+
+function makeAvatar(color) {
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({color});
+  const skin = new THREE.MeshStandardMaterial({color:0xe5b995});
+  const dark = new THREE.MeshStandardMaterial({color:0x252834});
+  function part(w,h,d,y,material,x=0,z=0) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material);
+    mesh.position.set(x,y,z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    return mesh;
+  }
+  part(.75,.9,.4,1.25,mat);
+  part(.62,.62,.62,2,skin);
+  part(.22,.18,.12,2.08,dark,-.16,-.31);
+  part(.22,.18,.12,2.08,dark,.16,-.31);
+  part(.25,.65,.3,.48,dark,-.2,0);
+  part(.25,.65,.3,.48,dark,.2,0);
+  part(.22,.7,.25,1.3,mat,-.49,0);
+  part(.22,.7,.25,1.3,mat,.49,0);
+  return group;
+}
+
+function setupGameChat() {
+  if (gameChatReady) return;
+  gameChatReady = true;
+
+  const form = $('gameChatForm');
+  const input = $('gameChatInput');
+  const panel = $('rbxChatPanel');
+  const toggle = $('rbxChatButton');
+
+  if (form) {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      sendGameChat();
+    }, true);
+  }
+
+  if (input) {
+    input.addEventListener('keydown', function(e) {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (form) form.requestSubmit();
+        else sendGameChat();
+      }
+    }, true);
+  }
+
+  if (toggle && panel) {
+    toggle.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      panel.classList.toggle('hidden');
+    });
+  }
+}
+
+function sendGameChat() {
+  const input=$('gameChatInput');
+  if(!socket || !socket.connected) {
+    addGameChat('DexBlocks','sign in to use game chat');
+    return;
+  }
+  const msg=input.value.trim();
+  if(!msg) return;
+  socket.emit('chat',msg);
+  input.value='';
+}
+
+function addGameChat(name,msg,role,verified=false) {
+  const log=$('gameChatLog');
+  if(!log) return;
+  const row=document.createElement('div');
+  row.style.cssText='padding:5px 0;border-bottom:1px solid #292a34;overflow-wrap:anywhere';
+  const who=document.createElement('strong');
+  who.textContent=name+': ';
+  const body=document.createElement('span');
+  body.textContent=msg;
+  row.append(who,body);
+  log.appendChild(row);
+  while(log.children.length>80) log.firstChild.remove();
+  log.scrollTop=log.scrollHeight;
+}
+
+
+function updateHeadChatBubbles() {
+  const bubbles = window.headChatBubbles;
+  if (!bubbles || !camera) return;
+
+  const cameraWorld = camera.getWorldQuaternion(new THREE.Quaternion());
+
+  for (const bubble of bubbles.values()) {
+    if (!bubble.parent) continue;
+
+    const parentWorld = bubble.parent.getWorldQuaternion(new THREE.Quaternion());
+    bubble.quaternion.copy(parentWorld.invert().multiply(cameraWorld));
+  }
+}
+
+function showHeadChat(username, message) {
+  if (!scene || !activeGameId) return;
+  const text = String(message || '').trim().slice(0, 100);
+  if (!text) return;
+
+  let target = null;
+  if (username === currentUser?.username) {
+    target = avatar;
+  } else {
+    for (const [id, person] of remotePlayers) {
+      if (person.username === username) {
+        target = remoteMeshes.get(id);
+        break;
+      }
+    }
+  }
+  if (!target) return;
+
+  if (!window.headChatBubbles) window.headChatBubbles = new Map();
+  const bubbles = window.headChatBubbles;
+  const previous = bubbles.get(username);
+  if (previous) {
+    previous.parent?.remove(previous);
+    previous.geometry.dispose();
+    previous.material.map?.dispose();
+    previous.material.dispose();
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'white';
+  ctx.strokeStyle = '#333344';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.roundRect(5, 5, 502, 118, 20);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#171721';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let shown = text;
+  while (ctx.measureText(shown).width > 460 && shown.length > 4)
+    shown = shown.slice(0, -4) + '...';
+  ctx.fillText(shown, 256, 64);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture, transparent: true, depthTest: false, side: THREE.DoubleSide
+  });
+  const bubble = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.85), material);
+  bubble.position.set(0, 2.5, 0);
+  bubble.renderOrder = 999;
+  target.add(bubble);
+  bubbles.set(username, bubble);
+
+  setTimeout(() => {
+    if (bubbles.get(username) !== bubble) return;
+    bubble.parent?.remove(bubble);
+    bubbles.delete(username);
+    bubble.geometry.dispose();
+    texture.dispose();
+    material.dispose();
+  }, 5000);
+}
+
+function drawWorld() {
+  if(!renderer || !scene || !camera) return;
+  updateHeadChatBubbles();
+  renderer.render(scene,camera);
+  const list=$('playerList');
+  if(!list) return;
+  list.innerHTML='';
+  const people=[{id:myPlayerId,username:currentUser?.username||'you',color:'#8b78ff'},...remotePlayers.values()];
+  for(const person of people) {
+    const row=document.createElement('div');
+    row.className='player-row';
+    const dot=document.createElement('span');
+    dot.className='player-dot';
+    dot.style.background=person.color||'#e39a53';
+    const name=document.createElement('span');
+    name.textContent=(person.username||'player')+(person.id===myPlayerId?' (you)':'');
+    row.append(dot,name);
+    list.appendChild(row);
+  }
+}
+
+function sendMyPosition() {
+  if(!socket || !socket.connected || !activeGameId || !currentUser) return;
+  socket.emit('playerMove',{x:myPlayer.x,y:myPlayer.y});
+}
+
+function buildWorld() {
+  if(renderer) {
+    renderer.dispose();
+    renderer=null;
+  }
+  scene=new THREE.Scene();
+  scene.background=new THREE.Color('#91b9d2');
+  scene.fog=new THREE.Fog('#91b9d2',28,85);
+  camera=new THREE.PerspectiveCamera(70,1,.1,200);
+  clock=new THREE.Clock();
+
+  renderer=new THREE.WebGLRenderer({canvas:world,antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  renderer.shadowMap.enabled=true;
+  renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+  renderer.outputColorSpace=THREE.SRGBColorSpace;
+
+  scene.add(new THREE.HemisphereLight(0xdceeff,0x65734d,2));
+  const sun=new THREE.DirectionalLight(0xfff0d8,3);
+  sun.position.set(-12,22,10);
+  sun.castShadow=true;
+  sun.shadow.mapSize.set(2048,2048);
+  scene.add(sun);
+
+  const grass=new THREE.MeshStandardMaterial({color:'#6d9b59'});
+  ground=new THREE.Mesh(new THREE.BoxGeometry(100,1,100),grass);
+  ground.position.y=-.55;
+  ground.receiveShadow=true;
+  scene.add(ground);
+
+  const pathMat=new THREE.MeshStandardMaterial({color:'#b9a17a'});
+  const road=new THREE.Mesh(new THREE.BoxGeometry(8,.04,100),pathMat);
+  road.position.set(0,-.01,0);
+  road.receiveShadow=true;
+  scene.add(road);
+  const cross=new THREE.Mesh(new THREE.BoxGeometry(100,.04,7),pathMat);
+  cross.position.set(0,0,0);
+  scene.add(cross);
+
+  const mats=['#789b55','#7e8e9d','#b68b62','#a7a7a7','#547c9a'].map(
+    c=>new THREE.MeshStandardMaterial({color:c,roughness:.9})
+  );
+  let seed=42;
+  const rand=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296};
+  for(let i=0;i<100;i++) {
+    let x=(rand()-.5)*75,z=(rand()-.5)*75;
+    if(Math.abs(x)<7 || Math.abs(z)<5) continue;
+    const h=1+rand()*4;
+    const mesh=new THREE.Mesh(new THREE.BoxGeometry(1.5+rand()*2,h,1.5+rand()*2),mats[i%mats.length]);
+    mesh.position.set(x,h/2,z);
+    mesh.castShadow=true;
+    mesh.receiveShadow=true;
+    scene.add(mesh);
+    gameObjects.push(mesh);
+  }
+
+  avatar=makeAvatar('#8b78ff');
+  scene.add(avatar);
+  for(const mesh of remoteMeshes.values()) scene.remove(mesh);
+  remoteMeshes.clear();
+
+  for(const person of remotePlayers.values()) {
+    const mesh=makeAvatar(person.color||'#e39a53');
+    scene.add(mesh);
+    remoteMeshes.set(person.id,mesh);
+  }
+  resizeGame();
+  updateAvatarPosition();
+  drawWorld();
+}
+
+let cameraYaw = 0.65;
+let cameraPitch = 0.28;
+let cameraDistance = 8;
+let moveVelocityX = 0;
+let moveVelocityZ = 0;
+let playerHeight = 0;
+let verticalVelocity = 0;
+let grounded = true;
+let mouseDragging = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
+
+function updateAvatarPosition() {
+  if (!avatar || !camera) return;
+
+  avatar.position.set(
+    (myPlayer.x - 450) / 25,
+    playerHeight,
+    (myPlayer.y - 260) / 25
+  );
+
+  const pitch = Math.max(-0.25, Math.min(0.9, cameraPitch));
+  const horizontal = Math.cos(pitch) * cameraDistance;
+  const desired = new THREE.Vector3(
+    avatar.position.x + Math.sin(cameraYaw) * horizontal,
+    playerHeight + (cameraDistance < 1 ? 1.55 : 2.8) + Math.sin(pitch) * cameraDistance,
+    avatar.position.z + Math.cos(cameraYaw) * horizontal
+  );
+
+  const blend = 1 - Math.exp(-10 / 60);
+  camera.position.lerp(desired, blend);
+  camera.lookAt(
+    avatar.position.x,
+    playerHeight + 1.35,
+    avatar.position.z
+  );
+}
+
+function resizeGame() {
+  if(!renderer || !camera || !$('playModal') || $('playModal').classList.contains('hidden')) return;
+  const stage=$('world').parentElement;
+  const w=Math.max(1,stage.clientWidth),h=Math.max(1,stage.clientHeight);
+  renderer.setSize(w,h,false);
+  camera.aspect=w/h;
+  camera.updateProjectionMatrix();
+  drawWorld();
+}
+
+function openGame(game) {
+  activeGame=game;
+  activeGameId=game.id;
+  myPlayer={x:450,y:260}; playerHeight=0; verticalVelocity=0; grounded=true;
+  remotePlayers.clear();
+  $('playTitle').textContent=game.title;
+  $('playStatus').textContent=currentUser?'connecting to multiplayer...':'solo mode · sign in for multiplayer';
+  $('playModal').classList.remove('hidden');
+  setupPauseMenu();
+  if (pauseMenu) pauseMenu.style.display = 'none';
+  setupGameChat();
+  if($('gameChatLog')) $('gameChatLog').innerHTML='';
+  if(socket && socket.connected) socket.emit('joinRoom','game-'+game.id);
+  buildWorld();
+  if(worldFrame) cancelAnimationFrame(worldFrame);
+  gameLoop();
+  resizeGame();
+}
+
+
+let pauseMenu = null;
+
+function setupPauseMenu() {
+  if (pauseMenu) return;
+  const modal = $('playModal');
+  if (!modal) return;
+
+  pauseMenu = document.createElement('div');
+  pauseMenu.id = 'dexPauseMenu';
+  pauseMenu.innerHTML = `
+    <div class="dex-pause-card">
+      <h2>game paused</h2>
+      <button type="button" id="dexResume">resume</button>
+      <button type="button" id="dexPauseLeave">leave game</button>
+      <p>press escape to resume</p>
+    </div>`;
+  pauseMenu.style.display = 'none';
+  modal.appendChild(pauseMenu);
+
+  $('dexResume').addEventListener('click', () => {
+    pauseMenu.style.display = 'none';
+    heldKeys.clear();
+  });
+  $('dexPauseLeave').addEventListener('click', () => {
+    pauseMenu.style.display = 'none';
+    closeGame();
+  });
+}
+
+function closeGame() {
+  activeGameId=null;
+  activeGame=null;
+  heldKeys.clear();
+  remotePlayers.clear();
+  if(socket && socket.connected) socket.emit('joinRoom',$('room').value||'lobby');
+  $('playModal').classList.add('hidden');
+  if(worldFrame) cancelAnimationFrame(worldFrame);
+  worldFrame=0;
+}
+
+$('leaveGame').onclick=closeGame;
+window.addEventListener('resize',resizeGame);
+window.addEventListener('keydown',e=>{
+  if(!activeGameId) return;
+  if(e.key === 'Escape') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    setupPauseMenu();
+    if (pauseMenu) {
+      pauseMenu.style.display =
+        pauseMenu.style.display === 'none' ? 'flex' : 'none';
+    }
+    heldKeys.clear();
+    return;
+  }
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  if (!['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) {
+    heldKeys.add(e.key.toLowerCase());
+  }
+});
+window.addEventListener('keyup',e=>heldKeys.delete(e.key.toLowerCase()));
+
+window.addEventListener('blur',()=>{heldKeys.clear();mouseDragging=false;});
+
+if (world) {
+  world.style.cursor = 'grab';
+
+  world.addEventListener('contextmenu', e => e.preventDefault());
+
+  world.addEventListener('pointerdown', e => {
+    if (!activeGameId || e.button !== 2) return;
+    e.preventDefault();
+    mouseDragging = true;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    world.setPointerCapture?.(e.pointerId);
+    world.style.cursor = 'grabbing';
+  });
+
+  world.addEventListener('pointermove', e => {
+    if (!mouseDragging || !activeGameId) return;
+
+    cameraYaw -= (e.clientX - lastMouseX) * 0.006;
+    cameraPitch = Math.max(-0.25, Math.min(0.9,
+      cameraPitch + (e.clientY - lastMouseY) * 0.004
+    ));
+
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+  });
+
+  const stopDragging = () => {
+    mouseDragging = false;
+    world.style.cursor = 'grab';
+  };
+
+  world.addEventListener('pointerup', stopDragging);
+  world.addEventListener('pointercancel', stopDragging);
+
+  world.addEventListener('wheel', e => {
+    if (!activeGameId) return;
+    e.preventDefault();
+    cameraDistance = Math.max(0.15, Math.min(16,
+      cameraDistance + e.deltaY * 0.012
+    ));
+  }, { passive: false });
+}
+
+
+function gameLoop() {
+  if(!activeGameId || !renderer) return;
+  const delta=Math.min(clock.getDelta(),.05);
+  let forward=0,side=0;
+  if(heldKeys.has('w')||heldKeys.has('arrowup')) forward+=1;
+  if(heldKeys.has('s')||heldKeys.has('arrowdown')) forward-=1;
+  if(heldKeys.has('a')||heldKeys.has('arrowleft')) side-=1;
+  if(heldKeys.has('d')||heldKeys.has('arrowright')) side+=1;
+
+  if((heldKeys.has(' ')||heldKeys.has('space')) && grounded) {
+    verticalVelocity=8.5;
+    grounded=false;
+  }
+  verticalVelocity-=22*delta;
+  playerHeight+=verticalVelocity*delta;
+  if(playerHeight<=0) {
+    playerHeight=0;
+    verticalVelocity=0;
+    grounded=true;
+  }
+
+  if (forward || side) {
+    const length = Math.hypot(forward, side) || 1;
+    forward /= length;
+    side /= length;
+  }
+
+  const desiredVX =
+    (-Math.sin(cameraYaw) * forward + Math.cos(cameraYaw) * side) * 7;
+  const desiredVZ =
+    (-Math.cos(cameraYaw) * forward - Math.sin(cameraYaw) * side) * 7;
+
+  const accelerating = forward !== 0 || side !== 0;
+  const blend = 1 - Math.exp(-(accelerating ? 16 : 20) * delta);
+  moveVelocityX += (desiredVX - moveVelocityX) * blend;
+  moveVelocityZ += (desiredVZ - moveVelocityZ) * blend;
+
+  if (!accelerating && Math.hypot(moveVelocityX, moveVelocityZ) < 0.04) {
+    moveVelocityX = 0;
+    moveVelocityZ = 0;
+  }
+
+  const moveX = moveVelocityX * delta;
+  const moveZ = moveVelocityZ * delta;
+  let x = (myPlayer.x - 450) / 25;
+  let z = (myPlayer.y - 260) / 25;
+
+  const canMove = (nx, nz) => {
+    if (Math.abs(nx) > 19 || Math.abs(nz) > 19) return false;
+    const radius = 0.48;
+
+    for (const object of gameObjects) {
+      const bounds = new THREE.Box3().setFromObject(object);
+      if (nx + radius > bounds.min.x && nx - radius < bounds.max.x &&
+          nz + radius > bounds.min.z && nz - radius < bounds.max.z) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  if (canMove(x + moveX, z)) x += moveX;
+  else moveVelocityX = 0;
+
+  if (canMove(x, z + moveZ)) z += moveZ;
+  else moveVelocityZ = 0;
+
+  myPlayer.x = 450 + x * 25;
+  myPlayer.y = 260 + z * 25;
+
+  if (avatar && Math.hypot(moveVelocityX, moveVelocityZ) > 0.1) {
+    const desiredYaw = Math.atan2(-moveVelocityX, -moveVelocityZ);
+    let angle = desiredYaw - avatar.rotation.y;
+    angle = Math.atan2(Math.sin(angle), Math.cos(angle));
+    avatar.rotation.y += angle * (1 - Math.exp(-12 * delta));
+    if (Math.floor(performance.now() / 100) % 2 === 0) sendMyPosition();
+  }
+  updateAvatarPosition();
+
+  for(const [id,p] of remotePlayers) {
+    let mesh=remoteMeshes.get(id);
+    if(!mesh) {
+      mesh=makeAvatar(p.color||'#e39a53');
+      scene.add(mesh);
+      remoteMeshes.set(id,mesh);
+    }
+    mesh.position.set((p.x-450)/25,0,(p.y-260)/25);
+  }
+  for(const [id,mesh] of remoteMeshes) {
+    if(!remotePlayers.has(id)) {
+      scene.remove(mesh);
+      remoteMeshes.delete(id);
+    }
+  }
+  updateHeadChatBubbles();
+  renderer.render(scene,camera);
+  worldFrame=requestAnimationFrame(gameLoop);
+}
+
+// Keep multiplayer events connected to the 3D scene and in-game chat.
+if(socket) {
+  socket.on('playerMove',p=>{
+    if(p && p.id && p.id!==myPlayerId) {
+      remotePlayers.set(p.id,p);
+      drawWorld();
+    }
+  });
+  socket.on('playerLeft',p=>{
+    if(p && p.id) {
+      remotePlayers.delete(p.id);
+      drawWorld();
+    }
+  });
+}
+
+
+/* mandatory DexBlocks account gate */
+function updateAuthGate() {
+  const gate = $('authGate');
+  if (!gate) return;
+  const allowed = !!(token && currentUser);
+  gate.classList.toggle('hidden', allowed);
+  document.body.classList.toggle('auth-locked', !allowed);
+  if (!allowed) {
+    $('gateLoginError').textContent = '';
+    $('gateLoginName').focus({preventScroll:true});
+  }
+}
+function showGateForm(which) {
+  const login = which === 'login';
+  $('gateLogin').classList.toggle('hidden', !login);
+  $('gateRegister').classList.toggle('hidden', login);
+  $('gateHeading').textContent = login ? 'Sign in to DexBlocks' : 'Create your account';
+  $('gateDescription').textContent = login
+    ? 'Sign in to continue to your games.'
+    : 'Create an account to start playing.';
+  $('gateLoginError').textContent = '';
+  $('gateRegisterError').textContent = '';
+}
+$('showGateRegister').onclick = () => showGateForm('register');
+$('showGateLogin').onclick = () => showGateForm('login');
+
+
+$('gateTestButton').onclick = async () => {
+  const button = $('gateTestButton');
+  const error = $('gateLoginError');
+  const username = 'DexBlocksTest';
+  const password = 'DexBlocksTest2026!';
+  button.disabled = true;
+  if (error) error.textContent = 'Signing in to test account...';
+
+  try {
+    let result;
+    try {
+      result = await api('/api/login', {
+        method: 'POST',
+        body: JSON.stringify({username, password})
+      });
+    } catch (loginError) {
+      try {
+        await api('/api/register', {
+          method: 'POST',
+          body: JSON.stringify({username, password})
+        });
+      } catch (registerError) {
+        // The account may already exist; try signing in again below.
+      }
+      result = await api('/api/login', {
+        method: 'POST',
+        body: JSON.stringify({username, password})
+      });
+    }
+
+    token = result.token;
+    localStorage.setItem('dexblocks-token', token);
+    await refreshMe();
+    updateAuthGate();
+    if (error) error.textContent = '';
+  } catch (e) {
+    if (error) error.textContent = e.message || 'Test account sign-in failed.';
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('gateLoginButton').onclick = async () => {
+  const button = $('gateLoginButton');
+  button.disabled = true;
+  $('gateLoginError').textContent = '';
+  try {
+    const result = await api('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: $('gateLoginName').value.trim(),
+        password: $('gateLoginPass').value
+      })
+    });
+    token = result.token;
+    localStorage.setItem('dexblocks-token', token);
+    await refreshMe();
+    if (!currentUser) throw new Error('Could not verify the account. Please try again.');
+    updateAuthGate();
+    status('Signed in successfully.');
+  } catch (e) {
+    $('gateLoginError').textContent = e.message || 'Sign in failed.';
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('gateRegisterButton').onclick = async () => {
+  const button = $('gateRegisterButton');
+  const username = $('gateRegisterName').value.trim();
+  const password = $('gateRegisterPass').value;
+  const confirm = $('gateRegisterConfirm').value;
+  $('gateRegisterError').textContent = '';
+
+  if (password !== confirm) {
+    $('gateRegisterError').textContent = 'Passwords do not match.';
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    await api('/api/register', {
+      method: 'POST',
+      body: JSON.stringify({username, password})
+    });
+    $('gateLoginName').value = username;
+    $('gateLoginPass').value = '';
+    showGateForm('login');
+    $('gateLoginError').textContent = 'Account created. Sign in to continue.';
+  } catch (e) {
+    $('gateRegisterError').textContent = e.message || 'Account creation failed.';
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('gateLoginPass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('gateLoginButton').click();
+});
+$('gateRegisterConfirm').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('gateRegisterButton').click();
+});
+
+/* Refresh account state and unlock only after a successful sign-in. */
+const dexblocksOriginalRefreshMe = refreshMe;
+refreshMe = async function() {
+  await dexblocksOriginalRefreshMe();
+  updateAuthGate();
+};
+updateAuthGate();
+refreshMe();
+
+
+/* Local DexBlocks settings */
+function applyDexSettings(){
+  const reduced=localStorage.getItem('dexblocks-reduced-motion')==='true';
+  const chat=localStorage.getItem('dexblocks-game-chat')!=='false';
+  const motionInput=$('settingReducedMotion');
+  const chatInput=$('settingGameChat');
+  if(motionInput) motionInput.checked=reduced;
+  if(chatInput) chatInput.checked=chat;
+  document.documentElement.classList.toggle('reduced-motion',reduced);
+  if(reduced) document.documentElement.style.scrollBehavior='auto';
+}
+if($('settingReducedMotion')){
+  $('settingReducedMotion').addEventListener('change',e=>{
+    localStorage.setItem('dexblocks-reduced-motion',String(e.target.checked));
+    applyDexSettings();
+  });
+}
+if($('settingGameChat')){
+  $('settingGameChat').addEventListener('change',e=>{
+    localStorage.setItem('dexblocks-game-chat',String(e.target.checked));
+  });
+}
+applyDexSettings();
