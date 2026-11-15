@@ -1,0 +1,51 @@
+{
+  "name": "dexblocks",
+  "version": "1.0.0",
+  "description": "DexBlocks desktop game platform",
+  "main": "main.js",
+  "author": "DexBlocks",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "server": "node server.js",
+    "build:win": "electron-builder --win portable",
+    "build:linux": "electron-builder --linux AppImage"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.2",
+    "multer": "^2.0.2",
+    "socket.io": "^4.8.1",
+    "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.dexblocks.desktop",
+    "productName": "DexBlocks",
+    "files": [
+      "main.js",
+      "server.js",
+      "public/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "portable"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Game"
+    }
+  },
+  "allowScripts": {
+    "electron@38.8.6": true
+  }
+}

@@ -1,0 +1,241 @@
+{
+  "users": [
+    {
+      "id": "6222e391-189d-47e7-b2a4-83b60e56298f",
+      "username": "Dexblocks",
+      "passwordHash": "$2a$12$7es3S8aLM3mC4zNw1lxOQeLNtJLGjc2PIoCtmThKFD6fwPR0oIX2m",
+      "role": "owner",
+      "verified": true,
+      "createdAt": 1792810167213
+    },
+    {
+      "id": "815c6c32-9ab5-4e60-bc83-be6f63c25b78",
+      "username": "123",
+      "passwordHash": "$2a$12$w2/MkA5C5aIWFPQMPa1O4OrPwiQaqOsA6XG.IfemXzoLFla1xJ49u",
+      "role": "user",
+      "verified": false,
+      "createdAt": 1792810788256
+    },
+    {
+      "id": "9a620be1-16a1-4844-b9c8-3643d8dd9970",
+      "username": "1234",
+      "passwordHash": "$2a$12$idKavXcqg2FixTOH1e.bCu0CE8YgVw4E/J4eRZsTAK6Zfdaodwn/K",
+      "role": "user",
+      "verified": false,
+      "createdAt": 1792811776878
+    },
+    {
+      "id": "ffa84bfd-634e-4c72-bf8c-4e62d06b2782",
+      "username": "DexBlocksTest",
+      "passwordHash": "$2a$12$rixswdPYHnwQlBdrT1D1f.gOn2EjpAUUVvfdfpcxzes5PLdAqh72S",
+      "role": "user",
+      "verified": false,
+      "createdAt": 1792817414262
+    }
+  ],
+  "games": [
+    {
+      "id": "welcome",
+      "title": "Block Builder",
+      "description": "A starter DexBlocks experience. Build and explore the demo world.",
+      "category": "Featured",
+      "visits": 115,
+      "owner": "Dexblocks",
+      "createdAt": 1792810161718
+    }
+  ],
+  "messages": [
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "HI",
+      "at": 1792810806377,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "HI",
+      "at": 1792810943031,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "HI",
+      "at": 1792810948089,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "HI",
+      "at": 1792811879014,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "hi",
+      "at": 1792811883059,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "HI",
+      "at": 1792812029899,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "asdwa",
+      "at": 1792812032710,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "hi",
+      "at": 1792812148121,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "hi",
+      "at": 1792812379325,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "Hi",
+      "at": 1792812709059,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "2312",
+      "at": 1792816630594,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "Hi",
+      "at": 1792816740812,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "HI",
+      "at": 1792816995645,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "HI",
+      "at": 1792817075738,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "awds",
+      "at": 1792817077576,
+      "room": "game-welcome"
+    },
+    {
+      "username": "123",
+      "role": "user",
+      "verified": false,
+      "message": "hi",
+      "at": 1792817092543,
+      "room": "game-welcome"
+    },
+    {
+      "username": "DexBlocksTest",
+      "role": "user",
+      "verified": false,
+      "message": "HI",
+      "at": 1792817421266,
+      "room": "game-welcome"
+    },
+    {
+      "username": "DexBlocksTest",
+      "role": "user",
+      "verified": false,
+      "message": "asdwaqsd",
+      "at": 1792817423135,
+      "room": "game-welcome"
+    },
+    {
+      "username": "DexBlocksTest",
+      "role": "user",
+      "verified": false,
+      "message": "Hi",
+      "at": 1792817431277,
+      "room": "game-welcome"
+    },
+    {
+      "username": "DexBlocksTest",
+      "role": "user",
+      "verified": false,
+      "message": "Hi",
+      "at": 1792817498213,
+      "room": "game-welcome"
+    },
+    {
+      "username": "DexBlocksTest",
+      "role": "user",
+      "verified": false,
+      "message": "Sup",
+      "at": 1792817540084,
+      "room": "game-welcome"
+    },
+    {
+      "username": "DexBlocksTest",
+      "role": "user",
+      "verified": false,
+      "message": "Hi",
+      "at": 1792817598869,
+      "room": "game-welcome"
+    },
+    {
+      "username": "DexBlocksTest",
+      "role": "user",
+      "verified": false,
+      "message": "hi",
+      "at": 1792817746716,
+      "room": "game-welcome"
+    },
+    {
+      "username": "DexBlocksTest",
+      "role": "user",
+      "verified": false,
+      "message": "SUP",
+      "at": 1792818163717,
+      "room": "game-welcome"
+    }
+  ]
+}
